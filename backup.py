@@ -9,10 +9,10 @@ from googleapiclient.http import MediaFileUpload
 from google.oauth2 import service_account
 
 # 1. Environment Variables Validation
-DATABASE_URL = os.environ.get("DATABASE_URL")
-FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID")
-SA_KEY_RAW = os.environ.get("GDRIVE_SA_KEY")
-RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "0"))  # 0 means disabled
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "").strip()
+SA_KEY_RAW = os.environ.get("GDRIVE_SA_KEY", "").strip()
+RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "0").strip())  # 0 means disabled
 
 missing_vars = []
 if not DATABASE_URL:
