@@ -8,29 +8,41 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2 import service_account
 
+# Force unbuffered output so logs appear instantly on Railway
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 # 1. Environment Variables Validation
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "").strip()
 SA_KEY_RAW = os.environ.get("GDRIVE_SA_KEY", "").strip()
-RETENTION_DAYS = int(os.environ.get("BACKUP_RETENTION_DAYS", "0").strip())  # 0 means disabled
+
+# OAuth2 credentials (for personal Google Drive with 5 TB quota)
+CLIENT_ID = os.environ.get("GDRIVE_CLIENT_ID", "").strip()
+CLIENT_SECRET = os.environ.get("GDRIVE_CLIENT_SECRET", "").strip()
+REFRESH_TOKEN = os.environ.get("GDRIVE_REFRESH_TOKEN", "").strip()
+
+retention_str = os.environ.get("BACKUP_RETENTION_DAYS", "0").strip()
+try:
+    RETENTION_DAYS = int(retention_str) if retention_str else 0
+except ValueError:
+    RETENTION_DAYS = 0
 
 missing_vars = []
 if not DATABASE_URL:
     missing_vars.append("DATABASE_URL")
 if not FOLDER_ID:
     missing_vars.append("GDRIVE_FOLDER_ID")
-if not SA_KEY_RAW:
-    missing_vars.append("GDRIVE_SA_KEY")
+
+# Check if either OAuth or Service Account is provided
+is_oauth = bool(CLIENT_ID and CLIENT_SECRET and REFRESH_TOKEN)
+is_sa = bool(SA_KEY_RAW)
+
+if not is_oauth and not is_sa:
+    missing_vars.append("GDRIVE_REFRESH_TOKEN (or GDRIVE_SA_KEY)")
 
 if missing_vars:
-    print(f"Error: Missing required environment variable(s): {', '.join(missing_vars)}", file=sys.stderr)
-    sys.exit(1)
-
-# Parse Service Account Key directly from memory
-try:
-    sa_info = json.loads(SA_KEY_RAW)
-except json.JSONDecodeError as e:
-    print(f"Error parsing GDRIVE_SA_KEY JSON: {e}", file=sys.stderr)
+    print(f"Error: Missing required environment variable(s): {', '.join(missing_vars)}", file=sys.stderr, flush=True)
     sys.exit(1)
 
 # 2. Prepare backup filename
@@ -69,10 +81,25 @@ try:
 
     # 4. Google Drive Authentication & Upload
     print("Connecting to Google Drive API...")
-    creds = service_account.Credentials.from_service_account_info(
-        sa_info,
-        scopes=["https://www.googleapis.com/auth/drive"]
-    )
+    if is_oauth:
+        print("Using OAuth 2.0 User Credentials (5 TB Personal Quota)...")
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(
+            None,
+            refresh_token=REFRESH_TOKEN,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            scopes=["https://www.googleapis.com/auth/drive"]
+        )
+    else:
+        print("Using Service Account Credentials...")
+        sa_info = json.loads(SA_KEY_RAW)
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info,
+            scopes=["https://www.googleapis.com/auth/drive"]
+        )
+
     service = build("drive", "v3", credentials=creds)
 
     print(f"Uploading {backup_file} to Google Drive folder '{FOLDER_ID}'...")
@@ -84,7 +111,8 @@ try:
     uploaded_file = service.files().create(
         body=file_metadata,
         media_body=media,
-        fields="id, name, size"
+        fields="id, name, size",
+        supportsAllDrives=True
     ).execute()
 
     print(f"Backup uploaded successfully! File ID: {uploaded_file.get('id')}")
@@ -96,7 +124,9 @@ try:
         results = service.files().list(
             q=query,
             fields="files(id, name, createdTime)",
-            orderBy="createdTime desc"
+            orderBy="createdTime desc",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
         ).execute()
         files = results.get("files", [])
 
@@ -107,11 +137,13 @@ try:
                 created_time = datetime.fromisoformat(created_time_str.replace("Z", "+00:00"))
                 age_days = (now - created_time).total_seconds() / 86400
                 if age_days > RETENTION_DAYS:
-                    service.files().delete(fileId=f["id"]).execute()
+                    service.files().delete(fileId=f["id"], supportsAllDrives=True).execute()
                     print(f"Deleted old backup: {f['name']} (Age: {int(age_days)} days)")
 
 except Exception as ex:
-    print(f"Backup failed: {ex}", file=sys.stderr)
+    import traceback
+    print(f"Backup failed: {ex}", file=sys.stderr, flush=True)
+    traceback.print_exc()
     sys.exit(1)
 
 finally:

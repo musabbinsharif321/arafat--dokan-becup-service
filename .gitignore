@@ -1,0 +1,8 @@
+client_secret.json
+tokens.txt
+sa.json
+*.json
+!requirements.txt
+__pycache__/
+*.sql
+*.gz

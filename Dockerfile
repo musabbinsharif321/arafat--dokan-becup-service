@@ -1,5 +1,7 @@
 FROM python:3.11-slim
 
+ENV PYTHONUNBUFFERED=1
+
 # Install PostgreSQL 16 client (compatible with Postgres 16, 15, 14, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
