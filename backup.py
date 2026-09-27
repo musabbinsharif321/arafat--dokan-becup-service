@@ -52,8 +52,8 @@ backup_file = f"backup_{timestamp}.sql.gz"
 try:
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting database backup: {backup_file}...")
 
-    # 3. Safe pg_dump execution (without shell=True, streaming directly into gzip)
-    # Using --no-owner --no-acl ensures smooth restore on any target PostgreSQL
+    # 3. Safe pg_dump execution (with automatic retry if database is starting up)
+    import time
     pg_dump_cmd = [
         "pg_dump",
         "--clean",
@@ -63,18 +63,30 @@ try:
         DATABASE_URL
     ]
 
-    with gzip.open(backup_file, "wb", compresslevel=6) as gz_out:
-        process = subprocess.run(
-            pg_dump_cmd,
-            stdout=gz_out,
-            stderr=subprocess.PIPE,
-            text=False,
-            check=False
-        )
+    max_retries = 3
+    retry_delay = 10
+    success = False
 
-    if process.returncode != 0:
+    for attempt in range(1, max_retries + 1):
+        with gzip.open(backup_file, "wb", compresslevel=6) as gz_out:
+            process = subprocess.run(
+                pg_dump_cmd,
+                stdout=gz_out,
+                stderr=subprocess.PIPE,
+                text=False,
+                check=False
+            )
+
+        if process.returncode == 0:
+            success = True
+            break
+
         err_msg = process.stderr.decode("utf-8", errors="replace")
-        raise RuntimeError(f"pg_dump failed with exit code {process.returncode}:\n{err_msg}")
+        if attempt < max_retries:
+            print(f"pg_dump attempt {attempt} failed ({err_msg.strip()}). Retrying in {retry_delay}s...")
+            time.sleep(retry_delay)
+        else:
+            raise RuntimeError(f"pg_dump failed with exit code {process.returncode}:\n{err_msg}")
 
     file_size_mb = os.path.getsize(backup_file) / (1024 * 1024)
     print(f"Database dumped and compressed successfully ({file_size_mb:.2f} MB).")
